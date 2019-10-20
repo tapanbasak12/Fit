@@ -1,16 +1,33 @@
 package com.example.fitnessapp;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.util.Log;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+
+import com.example.fitnessapp.logger.LogView;
+import com.example.fitnessapp.logger.LogWrapper;
+import com.example.fitnessapp.logger.MessageOnlyLogFilter;
 import com.google.android.gms.auth.api.signin.GoogleSignIn;
 
 import com.google.android.gms.common.Scopes;
+import com.google.android.gms.common.api.ResultCallback;
 import com.google.android.gms.common.api.Scope;
+import com.google.android.gms.common.api.Status;
 import com.google.android.gms.fitness.Fitness;
 import com.google.android.gms.fitness.FitnessOptions;
 import com.google.android.gms.fitness.data.*;
@@ -19,78 +36,108 @@ import com.google.android.gms.fitness.request.DataSourcesRequest;
 import com.google.android.gms.fitness.request.OnDataPointListener;
 import com.google.android.gms.fitness.request.SensorRequest;
 
+import com.google.android.gms.fitness.result.DataSourcesResult;
 import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.material.snackbar.Snackbar;
 
 
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-public class SensorClass extends AppCompatActivity implements OnDataPointListener, GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener {
+public class SensorClass extends AppCompatActivity {
 
-    int GOOGLE_FIT_PERMISSIONS_REQUEST_CODE = 0533;
+    public static final String TAG = "BasicSensorsApi";
 
-    private static final String TAG = "MyActivity";
-    OnDataPointListener mListener;
-    public GoogleApiClient mGoogleApiClient = null;
+    private static final int REQUEST_OAUTH_REQUEST_CODE = 1;
+    private static final int REQUEST_PERMISSIONS_REQUEST_CODE = 34;
 
+    // [START mListener_variable_reference]
+    // Need to hold a reference to this listener, as it's passed into the "unregister"
+    // method in order to stop all sensors from sending data to this listener.
+    private OnDataPointListener mListener;
+    // [END mListener_variable_reference]
 
+    // [START auth_oncreate_setup]
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Put application specific code here.
 
-
-        mGoogleApiClient = new GoogleApiClient.Builder(this)
-                .addApi(Fitness.SENSORS_API)
-                .addScope(new Scope(Scopes.FITNESS_ACTIVITY_READ_WRITE))
-                .addConnectionCallbacks(this)
-                .enableAutoManage(this, 0, this)
-                .build();
         setContentView(R.layout.activity_main);
+        // This method sets up our custom logger, which will print all log messages to the device
+        // screen, as well as to adb logcat.
+        initializeLogging();
 
-        Log.i("Tapan", "Data source found: " );
-
-
-
-
-        //Create a FitnessOptions instance, declaring the Fit API data types and access required by your app:
-
-        FitnessOptions fitnessOptions = FitnessOptions.builder()
-                .addDataType(DataType.TYPE_STEP_COUNT_DELTA, FitnessOptions.ACCESS_READ)
-                .addDataType(DataType.AGGREGATE_STEP_COUNT_DELTA, FitnessOptions.ACCESS_READ)
-                .build();
-
-
-        // Check if the user has previously granted the necessary data access, and if not, initiate the authorization flow:
-
-        if (!GoogleSignIn.hasPermissions(GoogleSignIn.getLastSignedInAccount(this), fitnessOptions)) {
-            GoogleSignIn.requestPermissions(this, GOOGLE_FIT_PERMISSIONS_REQUEST_CODE, GoogleSignIn.getLastSignedInAccount(this), fitnessOptions);
-            Log.i("Tapan", "Permission allowed " );
-
+        // When permissions are revoked the app is restarted so onCreate is sufficient to check for
+        // permissions core to the Activity's functionality.
+        if (hasRuntimePermissions()) {
+            findFitnessDataSourcesWrapper();
         } else {
-
-            listSources();
+            requestRuntimePermissions();
         }
     }
 
-    //If the authorization flow is required, handle the user's response:
+    /**
+     * A wrapper for {@link #findFitnessDataSources}. If the user account has OAuth permission,
+     * continue to {@link #findFitnessDataSources}, else request OAuth permission for the account.
+     */
+    private void findFitnessDataSourcesWrapper() {
+        if (hasOAuthPermission()) {
+            findFitnessDataSources();
+        } else {
+            requestOAuthPermission();
+        }
+    }
+
+    /** Gets the {@link FitnessOptions} in order to check or request OAuth permission for the user. */
+    private FitnessOptions getFitnessSignInOptions() {
+        return FitnessOptions.builder().addDataType(DataType.TYPE_LOCATION_SAMPLE).build();
+    }
+
+    /** Checks if user's account has OAuth permission to Fitness API. */
+    private boolean hasOAuthPermission() {
+        FitnessOptions fitnessOptions = getFitnessSignInOptions();
+        return GoogleSignIn.hasPermissions(GoogleSignIn.getLastSignedInAccount(this), fitnessOptions);
+    }
+
+    /** Launches the Google SignIn activity to request OAuth permission for the user. */
+    private void requestOAuthPermission() {
+        FitnessOptions fitnessOptions = getFitnessSignInOptions();
+        GoogleSignIn.requestPermissions(
+                this,
+                REQUEST_OAUTH_REQUEST_CODE,
+                GoogleSignIn.getLastSignedInAccount(this),
+                fitnessOptions);
+    }
+
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+    protected void onResume() {
+        super.onResume();
+
+        // This ensures that if the user denies the permissions then uses Settings to re-enable
+        // them, the app will start working.
+        findFitnessDataSourcesWrapper();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (resultCode == Activity.RESULT_OK) {
-            if (requestCode == GOOGLE_FIT_PERMISSIONS_REQUEST_CODE) {
-
-                Log.i("Tapan", "Entered On activity result" );
-                listSources();
-
+            if (requestCode == REQUEST_OAUTH_REQUEST_CODE) {
+                findFitnessDataSources();
             }
         }
     }
+    // [END auth_oncreate_setup]
 
-    public void listSources(){
+    /** Finds available data sources and attempts to register on a specific {@link DataType}. */
+    private void findFitnessDataSources() {
+        // [START find_data_sources]
+        // Note: Fitness.SensorsApi.findDataSources() requires the ACCESS_FINE_LOCATION permission.
         Fitness.getSensorsClient(this, GoogleSignIn.getLastSignedInAccount(this))
                 .findDataSources(
                         new DataSourcesRequest.Builder()
@@ -121,12 +168,16 @@ public class SensorClass extends AppCompatActivity implements OnDataPointListene
                                 Log.e(TAG, "failed", e);
                             }
                         });
+        // [END find_data_sources]
     }
 
-    private void registerFitnessDataListener(DataSource dataSource, DataType dataType){
-
-
-       mListener =
+    /**
+     * Registers a listener with the Sensors API for the provided {@link DataSource} and {@link
+     * DataType} combo.
+     */
+    private void registerFitnessDataListener(DataSource dataSource, DataType dataType) {
+        // [START register_data_listener]
+        mListener =
                 new OnDataPointListener() {
                     @Override
                     public void onDataPoint(DataPoint dataPoint) {
@@ -134,7 +185,6 @@ public class SensorClass extends AppCompatActivity implements OnDataPointListene
                             Value val = dataPoint.getValue(field);
                             Log.i(TAG, "Detected DataPoint field: " + field.getName());
                             Log.i(TAG, "Detected DataPoint value: " + val);
-
                         }
                     }
                 };
@@ -158,7 +208,21 @@ public class SensorClass extends AppCompatActivity implements OnDataPointListene
                                 }
                             }
                         });
+        // [END register_data_listener]
+    }
 
+    /** Unregisters the listener with the Sensors API. */
+    private void unregisterFitnessDataListener() {
+        if (mListener == null) {
+            // This code only activates one listener at a time.  If there's no listener, there's
+            // nothing to unregister.
+            return;
+        }
+
+        // [START unregister_data_listener]
+        // Waiting isn't actually necessary as the unregister call will complete regardless,
+        // even if called from within onStop, but a callback can still be added in order to
+        // inspect the results.
         Fitness.getSensorsClient(this, GoogleSignIn.getLastSignedInAccount(this))
                 .remove(mListener)
                 .addOnCompleteListener(
@@ -172,37 +236,141 @@ public class SensorClass extends AppCompatActivity implements OnDataPointListene
                                 }
                             }
                         });
-
-    }
-
-
-
-
-
-
-
-
-
-    @Override
-    public void onConnected(@Nullable Bundle bundle) {
-        Log.e("SensorApi", "onConnected");
-        listSources();
+        // [END unregister_data_listener]
     }
 
     @Override
-    public void onConnectionSuspended(int i) {
-
+    public boolean onCreateOptionsMenu(Menu menu) {
+        // Inflate the menu; this adds items to the action bar if it is present.
+        getMenuInflater().inflate(R.menu.main, menu);
+        return true;
     }
 
     @Override
-    public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
-
+    public boolean onOptionsItemSelected(MenuItem item) {
+        int id = item.getItemId();
+        if (id == R.id.action_unregister_listener) {
+            unregisterFitnessDataListener();
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
     }
 
+    /** Initializes a custom log class that outputs both to in-app targets and logcat. */
+    private void initializeLogging() {
+        // Wraps Android's native log framework.
+        LogWrapper logWrapper = new LogWrapper();
+        // Using Log, front-end to the logging chain, emulates android.util.log method signatures.
+        com.example.fitnessapp.logger.Log.setLogNode(logWrapper);
+        // Filter strips out everything except the message text.
+        MessageOnlyLogFilter msgFilter = new MessageOnlyLogFilter();
+        logWrapper.setNext(msgFilter);
+        // On screen logging via a customized TextView.
+        LogView logView = (LogView) findViewById(R.id.sample_logview);
 
+        // Fixing this lint errors adds logic without benefit.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            // noinspection AndroidLintDeprecation
+            logView.setTextAppearance(R.style.Log);
+        }
+
+        logView.setBackgroundColor(Color.WHITE);
+        msgFilter.setNext(logView);
+        Log.i(TAG, "Ready");
+    }
+
+    /** Returns the current state of the permissions needed. */
+    private boolean hasRuntimePermissions() {
+        int permissionState =
+                ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION);
+        return permissionState == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestRuntimePermissions() {
+        boolean shouldProvideRationale =
+                ActivityCompat.shouldShowRequestPermissionRationale(
+                        this, Manifest.permission.ACCESS_FINE_LOCATION);
+
+        // Provide an additional rationale to the user. This would happen if the user denied the
+        // request previously, but didn't check the "Don't ask again" checkbox.
+        if (shouldProvideRationale) {
+            Log.i(TAG, "Displaying permission rationale to provide additional context.");
+            Snackbar.make(
+                    findViewById(R.id.main_activity_view),
+                    R.string.permission_rationale,
+                    Snackbar.LENGTH_INDEFINITE)
+                    .setAction(
+                            R.string.ok,
+                            new View.OnClickListener() {
+                                @Override
+                                public void onClick(View view) {
+                                    // Request permission
+                                    ActivityCompat.requestPermissions(
+                                            SensorClass.this,
+                                            new String[] {Manifest.permission.ACCESS_FINE_LOCATION},
+                                            REQUEST_PERMISSIONS_REQUEST_CODE);
+                                }
+                            })
+                    .show();
+        } else {
+            Log.i(TAG, "Requesting permission");
+            // Request permission. It's possible this can be auto answered if device policy
+            // sets the permission in a given state or the user denied the permission
+            // previously and checked "Never ask again".
+            ActivityCompat.requestPermissions(
+                    SensorClass.this,
+                    new String[] {Manifest.permission.ACCESS_FINE_LOCATION},
+                    REQUEST_PERMISSIONS_REQUEST_CODE);
+        }
+    }
+
+    /** Callback received when a permissions request has been completed. */
     @Override
-    public void onDataPoint(DataPoint dataPoint) {
+    public void onRequestPermissionsResult(
+            int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        Log.i(TAG, "onRequestPermissionResult");
+        if (requestCode == REQUEST_PERMISSIONS_REQUEST_CODE) {
+            if (grantResults.length <= 0) {
+                // If user interaction was interrupted, the permission request is cancelled and you
+                // receive empty arrays.
+                Log.i(TAG, "User interaction was cancelled.");
+            } else if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                // Permission was granted.
+                findFitnessDataSourcesWrapper();
+            } else {
+                // Permission denied.
 
+                // In this Activity we've chosen to notify the user that they
+                // have rejected a core permission for the app since it makes the Activity useless.
+                // We're communicating this message in a Snackbar since this is a sample app, but
+                // core permissions would typically be best requested during a welcome-screen flow.
+
+                // Additionally, it is important to remember that a permission might have been
+                // rejected without asking the user for permission (device policy or "Never ask
+                // again" prompts). Therefore, a user interface affordance is typically implemented
+                // when permissions are denied. Otherwise, your app could appear unresponsive to
+                // touches or interactions which have required permissions.
+                Snackbar.make(
+                        findViewById(R.id.main_activity_view),
+                        R.string.permission_denied_explanation,
+                        Snackbar.LENGTH_INDEFINITE)
+                        .setAction(
+                                R.string.settings,
+                                new View.OnClickListener() {
+                                    @Override
+                                    public void onClick(View view) {
+                                        // Build intent that displays the App settings screen.
+                                        Intent intent = new Intent();
+                                        intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                                        Uri uri = Uri.fromParts("package", BuildConfig.APPLICATION_ID, null);
+                                        intent.setData(uri);
+                                        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                        startActivity(intent);
+                                    }
+                                })
+                        .show();
+            }
+        }
     }
 }
 
