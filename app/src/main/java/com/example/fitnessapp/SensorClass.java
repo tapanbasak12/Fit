@@ -16,12 +16,14 @@ import android.view.View;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 
 import com.example.fitnessapp.logger.LogView;
 import com.example.fitnessapp.logger.LogWrapper;
 import com.example.fitnessapp.logger.MessageOnlyLogFilter;
+import com.example.fitnessapp.permissions.Permissions;
 import com.google.android.gms.auth.api.signin.GoogleSignIn;
 
 import com.google.android.gms.common.Scopes;
@@ -73,13 +75,6 @@ public class SensorClass extends AppCompatActivity {
         // screen, as well as to adb logcat.
         initializeLogging();
 
-        // When permissions are revoked the app is restarted so onCreate is sufficient to check for
-        // permissions core to the Activity's functionality.
-        if (hasRuntimePermissions()) {
-            findFitnessDataSourcesWrapper();
-        } else {
-            requestRuntimePermissions();
-        }
     }
 
     /**
@@ -119,9 +114,15 @@ public class SensorClass extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
 
-        // This ensures that if the user denies the permissions then uses Settings to re-enable
-        // them, the app will start working.
-        findFitnessDataSourcesWrapper();
+        // When permissions are revoked the app is restarted so onCreate is sufficient to check for
+        // permissions core to the Activity's functionality.
+
+        Permissions.with(this)
+                .request(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.BODY_SENSORS)
+                .withPermanentDenialDialog("Fitness app requires these permissions")
+                .onAllGranted(this::findFitnessDataSources)
+                .onAnyDenied(this::finish)
+                .execute();
     }
 
     @Override
@@ -279,98 +280,12 @@ public class SensorClass extends AppCompatActivity {
         Log.i(TAG, "Ready");
     }
 
-    /** Returns the current state of the permissions needed. */
-    private boolean hasRuntimePermissions() {
-        int permissionState =
-                ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION);
-        return permissionState == PackageManager.PERMISSION_GRANTED;
-    }
-
-    private void requestRuntimePermissions() {
-        boolean shouldProvideRationale =
-                ActivityCompat.shouldShowRequestPermissionRationale(
-                        this, Manifest.permission.ACCESS_FINE_LOCATION);
-
-        // Provide an additional rationale to the user. This would happen if the user denied the
-        // request previously, but didn't check the "Don't ask again" checkbox.
-        if (shouldProvideRationale) {
-            Log.i(TAG, "Displaying permission rationale to provide additional context.");
-            Snackbar.make(
-                    findViewById(R.id.main_activity_view),
-                    R.string.permission_rationale,
-                    Snackbar.LENGTH_INDEFINITE)
-                    .setAction(
-                            R.string.ok,
-                            new View.OnClickListener() {
-                                @Override
-                                public void onClick(View view) {
-                                    // Request permission
-                                    ActivityCompat.requestPermissions(
-                                            SensorClass.this,
-                                            new String[] {Manifest.permission.ACCESS_FINE_LOCATION},
-                                            REQUEST_PERMISSIONS_REQUEST_CODE);
-                                }
-                            })
-                    .show();
-        } else {
-            Log.i(TAG, "Requesting permission");
-            // Request permission. It's possible this can be auto answered if device policy
-            // sets the permission in a given state or the user denied the permission
-            // previously and checked "Never ask again".
-            ActivityCompat.requestPermissions(
-                    SensorClass.this,
-                    new String[] {Manifest.permission.ACCESS_FINE_LOCATION},
-                    REQUEST_PERMISSIONS_REQUEST_CODE);
-        }
-    }
-
     /** Callback received when a permissions request has been completed. */
     @Override
     public void onRequestPermissionsResult(
             int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         Log.i(TAG, "onRequestPermissionResult");
-        if (requestCode == REQUEST_PERMISSIONS_REQUEST_CODE) {
-            if (grantResults.length <= 0) {
-                // If user interaction was interrupted, the permission request is cancelled and you
-                // receive empty arrays.
-                Log.i(TAG, "User interaction was cancelled.");
-            } else if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                // Permission was granted.
-                findFitnessDataSourcesWrapper();
-            } else {
-                // Permission denied.
-
-                // In this Activity we've chosen to notify the user that they
-                // have rejected a core permission for the app since it makes the Activity useless.
-                // We're communicating this message in a Snackbar since this is a sample app, but
-                // core permissions would typically be best requested during a welcome-screen flow.
-
-                // Additionally, it is important to remember that a permission might have been
-                // rejected without asking the user for permission (device policy or "Never ask
-                // again" prompts). Therefore, a user interface affordance is typically implemented
-                // when permissions are denied. Otherwise, your app could appear unresponsive to
-                // touches or interactions which have required permissions.
-                Snackbar.make(
-                        findViewById(R.id.main_activity_view),
-                        R.string.permission_denied_explanation,
-                        Snackbar.LENGTH_INDEFINITE)
-                        .setAction(
-                                R.string.settings,
-                                new View.OnClickListener() {
-                                    @Override
-                                    public void onClick(View view) {
-                                        // Build intent that displays the App settings screen.
-                                        Intent intent = new Intent();
-                                        intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                                        Uri uri = Uri.fromParts("package", BuildConfig.APPLICATION_ID, null);
-                                        intent.setData(uri);
-                                        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                        startActivity(intent);
-                                    }
-                                })
-                        .show();
-            }
-        }
+        Permissions.onRequestPermissionsResult(this, requestCode, permissions, grantResults);
     }
 }
 
