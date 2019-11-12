@@ -120,6 +120,7 @@ public class SensorClass extends AppCompatActivity {
         Permissions.with(this)
                 .request(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.BODY_SENSORS)
                 .withPermanentDenialDialog("Fitness app requires these permissions")
+                .ifNecessary()
                 .onAllGranted(this::findFitnessDataSources)
                 .onAnyDenied(this::finish)
                 .execute();
